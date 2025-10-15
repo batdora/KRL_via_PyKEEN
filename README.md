@@ -23,7 +23,9 @@ This repository provides a clean experimental setup to train and evaluate multip
 │   └── utils/
 │       └── experiment.py         # Training + evaluation driver
 ├── Data/
-│   └── FB15K237/                 # Provided dataset (OpenKE format)
+│   └── FB15K237/                 # Provided datasets
+└── └── WN18RR/
+│   └── YAGO3-10/
 ├── requirements.txt
 └── README.md
 ```
