@@ -16,8 +16,6 @@ This repository provides a clean experimental setup to train and evaluate multip
 .
 ├── main.py                       # Experiments entrypoint
 ├── src/
-│   ├── data/
-│   │   └── openke_loader.py      # One-time conversion utility to build TSV triples
 │   ├── models/
 │   │   └── registry.py           # Model registry + builders
 │   └── utils/
