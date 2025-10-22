@@ -67,44 +67,98 @@ def run_experiments(
         _configure_logger(run_dir)
 
         try:
-            result = pipeline(
-            dataset=dataset,
-            model=model_cls,
-            model_kwargs=model_kwargs,
-            training_loop=SLCWATrainingLoop,
-            training_kwargs={
-                "batch_size": batch_size,
-                "num_epochs": num_epochs,
-            },
-            optimizer="adam",
-            optimizer_kwargs={"lr": learning_rate},
-            evaluator=RankBasedEvaluator(),
-            random_seed=random_seed,
-            device=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-            )
+            if model_name == "TransR":
+                # Special handling for TransR: train on MPS, evaluate on CPU
+                logging.getLogger(__name__).info("Training TransR on MPS, will evaluate on CPU")
+                
+                # Train on MPS using lower-level API to avoid evaluation
+                training_device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+                
+                # Create model with required triples_factory parameter
+                model = model_cls(triples_factory=dataset.training, **model_kwargs)
+                model = model.to(training_device)
+                
+                # Create training loop
+                training_loop = SLCWATrainingLoop(
+                    model=model,
+                    triples_factory=dataset.training,
+                    optimizer=torch.optim.Adam(model.parameters(), lr=learning_rate),
+                )
+                
+                # Train the model
+                training_loop.train(
+                    triples_factory=dataset.training,
+                    num_epochs=num_epochs,
+                    batch_size=batch_size,
+                )
+                
+                # Create a mock result object for compatibility
+                class MockResult:
+                    def __init__(self, model, dataset):
+                        self.model = model
+                        self.dataset = dataset
+                        self.metric_results = None
+                    
+                    def save_to_directory(self, directory):
+                        # Save model and dataset info
+                        torch.save(self.model.state_dict(), os.path.join(directory, "model.pt"))
+                        with open(os.path.join(directory, "dataset_info.json"), "w") as f:
+                            json.dump({
+                                "num_entities": self.dataset.num_entities,
+                                "num_relations": self.dataset.num_relations,
+                            }, f)
+                
+                result = MockResult(model, dataset)
+                
+                # Evaluation will be done separately in metrics collection
+                
+            else:
+                # Normal pipeline for other models
+                device = torch.device("mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu")
+                
+                result = pipeline(
+                dataset=dataset,
+                model=model_cls,
+                model_kwargs=model_kwargs,
+                training_loop=SLCWATrainingLoop,
+                training_kwargs={
+                    "batch_size": batch_size,
+                    "num_epochs": num_epochs,
+                },
+                optimizer="adam",
+                optimizer_kwargs={"lr": learning_rate},
+                evaluator=RankBasedEvaluator(),
+                random_seed=random_seed,
+                device=device,
+                )
         except ValueError as e:
             # If a model is unsupported by installed PyKEEN, log and skip
             logging.getLogger(__name__).error("Skipping %s due to error: %s", model_name, e)
             continue
 
         # Collect filtered metrics from test set evaluator
-        # PyKEEN 1.11 uses nested results; flatten and extract 'both.realistic.*'
-        flat = result.metric_results.to_flat_dict()
-        def _get(key: str) -> float:
-            return float(flat.get(key, np.nan))
+        if model_name == "TransR":
+            # Metrics already collected in _evaluate_transr_on_cpu
+            metrics = _evaluate_transr_on_cpu(result, dataset, run_dir)
+        else:
+            # PyKEEN 1.11 uses nested results; flatten and extract 'both.realistic.*'
+            flat = result.metric_results.to_flat_dict()
+            def _get(key: str) -> float:
+                return float(flat.get(key, np.nan))
 
-        metrics = {
-            "mr": _get("both.realistic.arithmetic_mean_rank"),
-            "mrr": _get("both.realistic.mean_reciprocal_rank"),
-            "hits_at_1": _get("both.realistic.hits_at_1"),
-            "hits_at_3": _get("both.realistic.hits_at_3"),
-            "hits_at_10": _get("both.realistic.hits_at_10"),
-        }
+            metrics = {
+                "mr": _get("both.realistic.arithmetic_mean_rank"),
+                "mrr": _get("both.realistic.mean_reciprocal_rank"),
+                "hits_at_1": _get("both.realistic.hits_at_1"),
+                "hits_at_3": _get("both.realistic.hits_at_3"),
+                "hits_at_10": _get("both.realistic.hits_at_10"),
+            }
 
         # Persist artifacts
         result.save_to_directory(run_dir)
-        with open(os.path.join(run_dir, "metrics.json"), "w", encoding="utf-8") as f:
-            json.dump(metrics, f, indent=2)
+        if model_name != "TransR":  # Metrics already saved for TransR
+            with open(os.path.join(run_dir, "metrics.json"), "w", encoding="utf-8") as f:
+                json.dump(metrics, f, indent=2)
 
         all_results[model_name] = metrics
 
@@ -207,5 +261,49 @@ def _export_results_pdf(results: Dict[str, Dict[str, float]], out_dir: str) -> N
         table.scale(1, 1.5)
         pdf.savefig(fig2, bbox_inches='tight')
         plt.close(fig2)
+
+
+def _evaluate_transr_on_cpu(result, dataset, run_dir):
+    """Evaluate TransR model on CPU to avoid MPS tensor dimension limits."""
+    from pykeen.evaluation import RankBasedEvaluator
+    
+    # Move model to CPU
+    model = result.model
+    model.cpu()
+    
+    # Create evaluator
+    evaluator = RankBasedEvaluator()
+    
+    # Evaluate on CPU
+    logging.getLogger(__name__).info("Starting TransR evaluation on CPU...")
+    metric_results = evaluator.evaluate(
+        model=model,
+        mapped_triples=dataset.testing.mapped_triples,
+        additional_filter_triples=[
+            dataset.training.mapped_triples,
+            dataset.validation.mapped_triples,
+        ],
+        batch_size=32,  # Use smaller batch size for CPU evaluation
+    )
+    
+    # Extract metrics
+    flat = metric_results.to_flat_dict()
+    def _get(key: str) -> float:
+        return float(flat.get(key, np.nan))
+
+    metrics = {
+        "mr": _get("both.realistic.arithmetic_mean_rank"),
+        "mrr": _get("both.realistic.mean_reciprocal_rank"),
+        "hits_at_1": _get("both.realistic.hits_at_1"),
+        "hits_at_3": _get("both.realistic.hits_at_3"),
+        "hits_at_10": _get("both.realistic.hits_at_10"),
+    }
+    
+    # Save metrics
+    with open(os.path.join(run_dir, "metrics.json"), "w", encoding="utf-8") as f:
+        json.dump(metrics, f, indent=2)
+    
+    logging.getLogger(__name__).info("TransR evaluation completed on CPU")
+    return metrics
 
 

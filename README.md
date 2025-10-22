@@ -44,6 +44,8 @@ pip install -r requirements.txt
 
 If you have a CUDA-capable GPU, install the matching `torch` build per the official install guide before installing `pykeen`.
 
+Note: The curent setup checks for MPS then falls back to CUDA then falls back to CPU.
+
 ### Usage
 Run all models with default hyperparameters on FB15K237:
 ```bash
@@ -62,6 +64,8 @@ python main.py \
   --random_seed 42 \
   --output_dir outputs
 ```
+
+#### Note: TransR uses immense memory for evaluation. With the default setup, it requires 88GB of memory. Consider lowering batch size.
 
 Results are saved under `outputs/runs_<timestamp>/<MODEL_NAME>/`, with `metrics.json` for quick lookup and the full PyKEEN run artifacts. A summary table is printed to stdout and an aggregated JSON is saved to `outputs/runs_<timestamp>/aggregated_results.json`.
 

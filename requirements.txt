@@ -1,11 +1,11 @@
 pykeen==1.10.1
 torch>=2.2.0
-numpy>=1.24.0
+numpy<2.0.0,>=1.24.0
 scipy>=1.10.0
 pandas>=2.0.0
 click>=8.1.0
 pyyaml>=6.0
 tqdm>=4.66.0
 matplotlib>=3.7.0
-class-resolver>=0.4.6
+class-resolver>=0.4.0,<0.5.0
 
